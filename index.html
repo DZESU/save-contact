@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Save Contact – vCard Generator</title>
+<meta name="description" content="Create a .vcf contact card with photo, right in your browser. Nothing is uploaded.">
+<style>
+:root{
+  --bg:#f5f6f8; --card:#fff; --text:#1c1f24; --muted:#6b7280; --border:#dfe2e7;
+  --accent:#2563eb; --accent-text:#fff; --danger:#dc2626; --input:#fff;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#111317; --card:#1b1e24; --text:#e8eaed; --muted:#9aa0a8; --border:#30343c;
+    --accent:#4f8bff; --accent-text:#fff; --danger:#f87171; --input:#14171c; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{max-width:860px;margin:0 auto;padding:24px 16px 8px}
+header h1{margin:0 0 4px;font-size:24px}
+header p{margin:0;color:var(--muted)}
+main{max-width:860px;margin:0 auto;padding:8px 16px 120px}
+section{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin:14px 0}
+section h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+input,select,textarea{font:inherit;color:var(--text);background:var(--input);border:1px solid var(--border);
+  border-radius:8px;padding:8px 10px;width:100%;min-width:0}
+textarea{min-height:80px;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+button{font:inherit;border:1px solid var(--border);background:var(--card);color:var(--text);
+  border-radius:8px;padding:8px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-text);font-weight:600}
+button.small{padding:4px 10px;font-size:13px}
+button.icon{padding:6px 10px;color:var(--danger)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:grid;grid-template-columns:130px 1fr auto;gap:8px;margin-bottom:8px;align-items:start}
+.row.adr{grid-template-columns:130px 1fr auto}
+.adr-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.adr-fields .full{grid-column:1/-1}
+@media (max-width:560px){
+  .row,.row.adr{grid-template-columns:1fr auto}
+  .row > select{grid-column:1/2}
+  .row > :nth-child(2){grid-column:1/-1;grid-row:2}
+  .row > button{grid-column:2;grid-row:1}
+  .adr-fields{grid-template-columns:1fr}
+}
+.hint{font-size:13px;color:var(--muted);margin:6px 0 0}
+details summary{cursor:pointer;color:var(--muted);font-size:14px;margin-top:8px}
+
+/* photo */
+.photo-wrap{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.thumb{width:120px;height:120px;border-radius:50%;background:var(--bg);border:1px solid var(--border);
+  overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;flex:none}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.photo-info{flex:1;min-width:200px;display:flex;flex-direction:column;gap:8px}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+
+/* editor */
+dialog{border:none;border-radius:14px;padding:0;background:var(--card);color:var(--text);
+  width:min(560px,calc(100vw - 24px));max-height:calc(100vh - 24px)}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.ed{padding:16px;display:flex;flex-direction:column;gap:12px}
+.ed h3{margin:0;font-size:17px}
+.stage{position:relative;width:100%;aspect-ratio:1/1;background:#000;border-radius:8px;overflow:hidden;
+  touch-action:none;cursor:grab;user-select:none}
+.stage.dragging{cursor:grabbing}
+.stage canvas{width:100%;height:100%;display:block}
+.slider{display:grid;grid-template-columns:110px 1fr 90px;gap:10px;align-items:center;font-size:13px;color:var(--muted)}
+.slider output{text-align:right;color:var(--text);font-variant-numeric:tabular-nums}
+.slider input{padding:0}
+.ed .stats{font-size:13px;color:var(--muted)}
+.ed .stats b{color:var(--text)}
+.ed footer{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+
+/* bottom bar */
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--border);
+  padding:12px 16px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap;z-index:5}
+pre{white-space:pre-wrap;word-break:break-all;font-size:12px;background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;padding:10px;max-height:320px;overflow:auto;margin:0}
+.err{color:var(--danger);font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Save Contact</h1>
+  <p>Fill in the details and download a <code>.vcf</code> file you can import on any phone. Everything stays in your browser.</p>
+</header>
+
+<main>
+<form id="form" autocomplete="off" onsubmit="return false">
+
+<section>
+  <h2>Photo</h2>
+  <div class="photo-wrap">
+    <div class="thumb" id="thumb">No photo</div>
+    <div class="photo-info">
+      <div class="btns">
+        <button type="button" id="pickBtn">Choose image…</button>
+        <button type="button" id="editBtn" disabled>Edit crop / size</button>
+        <button type="button" id="removeBtn" class="icon" disabled>Remove</button>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden>
+      <div class="hint" id="photoStats">Any image format your browser can open. It will be cropped square, resized and converted to JPEG.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Name</h2>
+  <div class="grid">
+    <label>Prefix<input name="prefix" placeholder="Dr."></label>
+    <label>First name<input name="given"></label>
+    <label>Middle name<input name="middle"></label>
+    <label>Last name<input name="family"></label>
+    <label>Suffix<input name="suffix" placeholder="Jr."></label>
+    <label>Nickname<input name="nickname"></label>
+  </div>
+  <details>
+    <summary>Phonetic names &amp; display name</summary>
+    <div class="grid" style="margin-top:10px">
+      <label>Phonetic first name<input name="pFirst"></label>
+      <label>Phonetic middle name<input name="pMiddle"></label>
+      <label>Phonetic last name<input name="pLast"></label>
+      <label>Display name (optional)<input name="fn" placeholder="Auto from name"></label>
+    </div>
+  </details>
+</section>
+
+<section>
+  <h2>Work</h2>
+  <div class="grid">
+    <label>Company<input name="org"></label>
+    <label>Department<input name="dept"></label>
+    <label>Job title<input name="title"></label>
+  </div>
+</section>
+
+<section>
+  <h2>Phone <button type="button" class="small" data-add="tel">+ Add</button></h2>
+  <div id="tel"></div>
+</section>
+
+<section>
+  <h2>Email <button type="button" class="small" data-add="email">+ Add</button></h2>
+  <div id="email"></div>
+</section>
+
+<section>
+  <h2>Address <button type="button" class="small" data-add="adr">+ Add</button></h2>
+  <div id="adr"></div>
+</section>
+
+<section>
+  <h2>Website <button type="button" class="small" data-add="url">+ Add</button></h2>
+  <div id="url"></div>
+</section>
+
+<section>
+  <h2>Social profiles <button type="button" class="small" data-add="social">+ Add</button></h2>
+  <div id="social"></div>
+</section>
+
+<section>
+  <h2>Instant message <button type="button" class="small" data-add="impp">+ Add</button></h2>
+  <div id="impp"></div>
+</section>
+
+<section>
+  <h2>Dates</h2>
+  <div class="grid">
+    <label>Birthday<input type="date" name="bday"></label>
+    <label>Anniversary<input type="date" name="anniv"></label>
+  </div>
+</section>
+
+<section>
+  <h2>Notes</h2>
+  <textarea name="note"></textarea>
+</section>
+
+<section id="previewSec" hidden>
+  <h2>vCard preview</h2>
+  <pre id="preview"></pre>
+</section>
+
+</form>
+</main>
+
+<div class="bar">
+  <button type="button" id="previewBtn">Preview</button>
+  <button type="button" id="resetBtn">Clear</button>
+  <button type="button" class="primary" id="downloadBtn">Download .vcf</button>
+</div>
+
+<dialog id="editor">
+  <div class="ed">
+    <h3>Crop photo (1:1)</h3>
+    <div class="stage" id="stage"><canvas id="cv"></canvas></div>
+    <p class="hint" style="margin:0">Drag to move. Use the slider, mouse wheel or pinch to zoom.</p>
+    <div class="slider"><span>Zoom</span><input type="range" id="zoom" min="1" max="5" step="0.01" value="1"><output id="zoomOut">1.00×</output></div>
+    <div class="slider"><span>Resolution</span><input type="range" id="res" min="64" max="1024" step="16" value="400"><output id="resOut">400 px</output></div>
+    <div class="slider"><span>JPEG quality</span><input type="range" id="qual" min="30" max="100" step="1" value="85"><output id="qualOut">85%</output></div>
+    <div class="btns">
+      <button type="button" class="small" id="rotL">⟲ Rotate</button>
+      <button type="button" class="small" id="rotR">⟳ Rotate</button>
+      <button type="button" class="small" id="resetCrop">Reset</button>
+    </div>
+    <div class="stats" id="edStats">Estimated size: …</div>
+    <footer>
+      <button type="button" id="edCancel">Cancel</button>
+      <button type="button" class="primary" id="edApply">Use photo</button>
+    </footer>
+  </div>
+</dialog>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const form = $('#form');
+
+/* ---------- repeating rows ---------- */
+const TYPES = {
+  tel:   [['cell','Mobile'],['iphone','iPhone'],['home','Home'],['work','Work'],['main','Main'],['home-fax','Home fax'],['work-fax','Work fax'],['pager','Pager'],['other','Other']],
+  email: [['home','Home'],['work','Work'],['other','Other']],
+  adr:   [['home','Home'],['work','Work'],['other','Other']],
+  url:   [['homepage','Homepage'],['home','Home'],['work','Work'],['other','Other']],
+  social:[['facebook','Facebook'],['instagram','Instagram'],['x','X / Twitter'],['linkedin','LinkedIn'],['tiktok','TikTok'],['youtube','YouTube'],['github','GitHub'],['telegram','Telegram'],['other','Other']],
+  impp:  [['telegram','Telegram'],['whatsapp','WhatsApp'],['signal','Signal'],['line','LINE'],['wechat','WeChat'],['skype','Skype'],['other','Other']],
+};
+const PLACEHOLDER = {tel:'+1 555 123 4567', email:'name@example.com', url:'https://example.com', social:'username or profile URL', impp:'username or number'};
+const INPUT_TYPE = {tel:'tel', email:'email', url:'url', social:'text', impp:'text'};
+
+function addRow(kind){
+  const box = document.getElementById(kind);
+  const row = document.createElement('div');
+  row.className = 'row' + (kind === 'adr' ? ' adr' : '');
+  row.dataset.kind = kind;
+  const sel = document.createElement('select');
+  sel.setAttribute('aria-label', 'Type');
+  for (const [v,l] of TYPES[kind]) sel.add(new Option(l, v));
+  if (kind === 'tel' && box.children.length) sel.value = 'work';
+  if (kind === 'email' && box.children.length) sel.value = 'work';
+  if (kind === 'adr' && box.children.length) sel.value = 'work';
+  row.appendChild(sel);
+  if (kind === 'adr') {
+    const f = document.createElement('div');
+    f.className = 'adr-fields';
+    f.innerHTML =
+      '<input class="full" data-f="street" placeholder="Street">' +
+      '<input data-f="ext" placeholder="Apt / Suite">' +
+      '<input data-f="pobox" placeholder="PO Box">' +
+      '<input data-f="city" placeholder="City">' +
+      '<input data-f="region" placeholder="State / Province">' +
+      '<input data-f="postal" placeholder="Postal code">' +
+      '<input data-f="country" placeholder="Country">';
+    row.appendChild(f);
+  } else {
+    const inp = document.createElement('input');
+    inp.type = INPUT_TYPE[kind];
+    inp.placeholder = PLACEHOLDER[kind];
+    inp.dataset.f = 'value';
+    row.appendChild(inp);
+  }
+  const del = document.createElement('button');
+  del.type = 'button'; del.className = 'icon'; del.textContent = '✕';
+  del.setAttribute('aria-label', 'Remove');
+  del.onclick = () => row.remove();
+  row.appendChild(del);
+  box.appendChild(row);
+  return row;
+}
+document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+  const r = addRow(b.dataset.add); r.querySelector('input').focus();
+});
+function initRows(){
+  for (const k of Object.keys(TYPES)) document.getElementById(k).innerHTML = '';
+  addRow('tel'); addRow('email');
+}
+initRows();
+
+/* ---------- vCard building ---------- */
+const enc = new TextEncoder();
+const esc = s => String(s).replace(/\\/g,'\\\\').replace(/\r?\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;');
+const v = n => (form.elements[n]?.value || '').trim();
+
+// Fold to max 75 octets per line, never splitting a UTF-8 character.
+function fold(line){
+  if (enc.encode(line).length <= 75) return line;
+  const out = []; let cur = ''; let bytes = 0; let limit = 75;
+  for (const ch of line) {
+    const b = enc.encode(ch).length;
+    if (bytes + b > limit) { out.push(cur); cur = ''; bytes = 0; limit = 74; }
+    cur += ch; bytes += b;
+  }
+  out.push(cur);
+  return out.join('\r\n ');
+}
+
+const SOCIAL_URL = {
+  facebook:u=>'https://www.facebook.com/'+u, instagram:u=>'https://www.instagram.com/'+u,
+  x:u=>'https://x.com/'+u, linkedin:u=>'https://www.linkedin.com/in/'+u, tiktok:u=>'https://www.tiktok.com/@'+u,
+  youtube:u=>'https://www.youtube.com/@'+u, github:u=>'https://github.com/'+u, telegram:u=>'https://t.me/'+u,
+};
+const IMPP_SCHEME = {telegram:'tg:',whatsapp:'whatsapp:',signal:'sgnl:',line:'line:',wechat:'weixin:',skype:'skype:',other:'x-apple:'};
+const LABEL = (kind,val) => (TYPES[kind].find(t=>t[0]===val)||[])[1] || val;
+
+let photoB64 = '';
+
+function build(){
+  const L = [];
+  const p = s => L.push(s);
+  const given=v('given'), family=v('family'), middle=v('middle'), prefix=v('prefix'), suffix=v('suffix');
+  const org=v('org'), dept=v('dept');
+  let fn = v('fn') || [prefix,given,middle,family].filter(Boolean).join(' ') + (suffix ? ', ' + suffix : '');
+  fn = fn.trim() || org || v('nickname');
+  p('BEGIN:VCARD');
+  p('VERSION:3.0');
+  p('N:' + [family,given,middle,prefix,suffix].map(esc).join(';'));
+  p('FN:' + esc(fn));
+  if (v('nickname')) p('NICKNAME:' + esc(v('nickname')));
+  if (v('pFirst')) p('X-PHONETIC-FIRST-NAME:' + esc(v('pFirst')));
+  if (v('pMiddle')) p('X-PHONETIC-MIDDLE-NAME:' + esc(v('pMiddle')));
+  if (v('pLast')) p('X-PHONETIC-LAST-NAME:' + esc(v('pLast')));
+  if (org || dept) p('ORG:' + esc(org) + (dept ? ';' + esc(dept) : ''));
+  if (v('title')) p('TITLE:' + esc(v('title')));
+
+  let n = 0;
+  const rows = kind => [...document.querySelectorAll('#'+kind+' .row')].map(r => {
+    const o = {type: r.querySelector('select').value};
+    r.querySelectorAll('[data-f]').forEach(i => o[i.dataset.f] = i.value.trim());
+    return o;
+  });
+  rows('tel').forEach((r,i) => { if (!r.value) return;
+    const t = {'cell':'CELL','iphone':'IPHONE,CELL','home':'HOME','work':'WORK','main':'MAIN','home-fax':'HOME,FAX','work-fax':'WORK,FAX','pager':'PAGER','other':'OTHER'}[r.type];
+    p('TEL;TYPE=' + t + (/FAX|PAGER/.test(t) ? '' : ',VOICE') + (i===0?',PREF':'') + ':' + r.value.replace(/[^\d+*#,pPwWxX ()\-.]/g,''));
+  });
+  rows('email').forEach((r,i) => { if (!r.value) return;
+    p('EMAIL;TYPE=INTERNET,' + r.type.toUpperCase() + (i===0?',PREF':'') + ':' + esc(r.value));
+  });
+  rows('adr').forEach(r => {
+    const parts = [r.pobox,r.ext,r.street,r.city,r.region,r.postal,r.country];
+    if (!parts.some(Boolean)) return;
+    p('ADR;TYPE=' + r.type.toUpperCase() + ':' + parts.map(x=>esc(x||'')).join(';'));
+  });
+  rows('url').forEach(r => { if (!r.value) return;
+    if (r.type === 'homepage') { n++; p('item'+n+'.URL:' + esc(r.value)); p('item'+n+'.X-ABLabel:_$!<HomePage>!$_'); }
+    else p('URL;TYPE=' + r.type.toUpperCase() + ':' + esc(r.value));
+  });
+  rows('social').forEach(r => { if (!r.value) return;
+    const isUrl = /^https?:\/\//i.test(r.value);
+    const user = isUrl ? r.value.replace(/\/+$/,'').split('/').pop().replace(/^@/,'') : r.value.replace(/^@/,'');
+    const url = isUrl ? r.value : (SOCIAL_URL[r.type] ? SOCIAL_URL[r.type](user) : '');
+    const label = LABEL('social', r.type).split(' ')[0];
+    p('X-SOCIALPROFILE;TYPE=' + r.type.replace(/\W/g,'') + ';x-user=' + user.replace(/[;:,"]/g,'') + ':' + esc(url || user));
+    if (url) { n++; p('item'+n+'.URL:' + esc(url)); p('item'+n+'.X-ABLabel:' + esc(label)); }
+  });
+  rows('impp').forEach(r => { if (!r.value) return;
+    n++;
+    const label = LABEL('impp', r.type);
+    const val = /^[a-z][a-z0-9+.-]*:/i.test(r.value) ? r.value : IMPP_SCHEME[r.type] + r.value;
+    p('item'+n+'.IMPP;X-SERVICE-TYPE=' + label.replace(/[;:,"]/g,'') + ':' + esc(val));
+    p('item'+n+'.X-ABLabel:' + esc(label));
+  });
+  if (v('bday')) p('BDAY:' + v('bday'));
+  if (v('anniv')) { n++; p('item'+n+'.X-ABDATE:' + v('anniv')); p('item'+n+'.X-ABLabel:_$!<Anniversary>!$_'); p('X-ANNIVERSARY:' + v('anniv')); }
+  if (v('note')) p('NOTE:' + esc(form.elements.note.value.trim()));
+  if (photoB64) p('PHOTO;ENCODING=b;TYPE=JPEG:' + photoB64);
+  p('REV:' + new Date().toISOString().replace(/\.\d+/,''));
+  p('END:VCARD');
+  return { text: L.map(fold).join('\r\n') + '\r\n', fn };
+}
+
+function filename(fn){
+  return (fn || 'contact').replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim().slice(0,80) || 'contact';
+}
+
+$('#downloadBtn').onclick = () => {
+  const {text, fn} = build();
+  if (!fn) { alertMsg('Enter at least a name or company.'); return; }
+  const blob = new Blob([text], {type:'text/vcard;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename(fn) + '.vcf';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+};
+$('#previewBtn').onclick = () => {
+  const {text} = build();
+  $('#previewSec').hidden = false;
+  $('#preview').textContent = text.replace(/(PHOTO;[^:]*:)([\s\S]*?)(\r\nREV)/, (m,a,b,c) =>
+    a + b.replace(/\r\n /g,'').slice(0,60) + '… (' + fmtBytes(photoB64.length) + ' base64)' + c);
+  $('#previewSec').scrollIntoView({behavior:'smooth'});
+};
+$('#resetBtn').onclick = () => {
+  if (!confirm('Clear all fields?')) return;
+  form.reset(); initRows(); setPhoto(null); $('#previewSec').hidden = true;
+};
+function alertMsg(m){ alert(m); }
+function fmtBytes(b){ return b < 1024 ? b + ' B' : (b/1024).toFixed(1) + ' KB'; }
+
+/* ---------- photo editor ---------- */
+const dlg = $('#editor'), cv = $('#cv'), ctx = cv.getContext('2d'), stage = $('#stage');
+const zoomEl = $('#zoom'), resEl = $('#res'), qualEl = $('#qual');
+let img = null;          // HTMLImageElement / ImageBitmap of the source
+let st = {zoom:1, rot:0, cx:0.5, cy:0.5}; // crop centre in rotated-image fraction coords
+let applied = null;      // last applied state, for re-editing
+let srcFileImg = null;
+
+function rotatedSize(){ return st.rot % 180 ? [img.height, img.width] : [img.width, img.height]; }
+// Side length of the crop square in rotated-image pixels
+function cropSide(){ const [w,h] = rotatedSize(); return Math.min(w,h) / st.zoom; }
+function clamp(){
+  const [w,h] = rotatedSize(), s = cropSide();
+  st.cx = Math.min(Math.max(st.cx, s/2/w), 1 - s/2/w);
+  st.cy = Math.min(Math.max(st.cy, s/2/h), 1 - s/2/h);
+}
+// draw the crop region into a context of size `size`
+function drawCrop(c, size){
+  const [w,h] = rotatedSize(), s = cropSide();
+  const sx = st.cx*w - s/2, sy = st.cy*h - s/2;
+  const k = size / s;
+  c.save();
+  c.fillStyle = '#fff'; c.fillRect(0,0,size,size);
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+  c.scale(k,k); c.translate(-sx,-sy);
+  // rotate about rotated canvas: map original image into rotated space
+  c.translate(w/2,h/2); c.rotate(st.rot*Math.PI/180); c.drawImage(img, -img.width/2, -img.height/2);
+  c.restore();
+}
+function render(){
+  const px = Math.round(stage.clientWidth * (window.devicePixelRatio||1)) || 500;
+  if (cv.width !== px) { cv.width = cv.height = px; }
+  drawCrop(ctx, px);
+  // circle guide
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = Math.max(1, px/300); ctx.setLineDash([px/60, px/80]);
+  ctx.beginPath(); ctx.arc(px/2,px/2,px/2-ctx.lineWidth,0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+  $('#zoomOut').textContent = st.zoom.toFixed(2) + '×';
+  scheduleStats();
+}
+
+// Multi-step downscale for quality, then JPEG
+function exportJpeg(){
+  const size = +resEl.value;
+  const s = cropSide();
+  let srcSize = Math.min(Math.round(s), 4096);
+  let c = document.createElement('canvas'); c.width = c.height = Math.max(srcSize, size);
+  drawCrop(c.getContext('2d'), c.width);
+  while (c.width / 2 >= size) {
+    const n = document.createElement('canvas'); n.width = n.height = Math.round(c.width/2);
+    const nc = n.getContext('2d'); nc.imageSmoothingQuality = 'high'; nc.drawImage(c,0,0,n.width,n.height); c = n;
+  }
+  if (c.width !== size) {
+    const n = document.createElement('canvas'); n.width = n.height = size;
+    const nc = n.getContext('2d'); nc.imageSmoothingQuality = 'high'; nc.drawImage(c,0,0,size,size); c = n;
+  }
+  return c.toDataURL('image/jpeg', +qualEl.value/100);
+}
+let statsT = 0;
+function scheduleStats(){
+  clearTimeout(statsT);
+  statsT = setTimeout(() => {
+    if (!img) return;
+    const url = exportJpeg(), b64 = url.split(',')[1];
+    const bytes = Math.floor(b64.length*3/4) - (b64.endsWith('==')?2:b64.endsWith('=')?1:0);
+    const warn = b64.length > 224*1024 ? ' <span class="err">Large photos may be rejected by some phones; try a lower resolution or quality.</span>' : '';
+    $('#edStats').innerHTML = `Output: <b>${resEl.value}×${resEl.value}</b> JPEG · <b>${fmtBytes(bytes)}</b> file · <b>${fmtBytes(b64.length)}</b> in vCard (base64)` + warn;
+  }, 120);
+}
+
+function updateLabels(){
+  $('#resOut').textContent = resEl.value + ' px';
+  $('#qualOut').textContent = qualEl.value + '%';
+}
+zoomEl.oninput = () => { st.zoom = +zoomEl.value; clamp(); render(); };
+resEl.oninput = qualEl.oninput = () => { updateLabels(); scheduleStats(); };
+$('#rotL').onclick = () => { st.rot = (st.rot + 270) % 360; st.cx = st.cy = .5; clamp(); render(); };
+$('#rotR').onclick = () => { st.rot = (st.rot + 90) % 360; st.cx = st.cy = .5; clamp(); render(); };
+$('#resetCrop').onclick = () => { st = {zoom:1,rot:0,cx:.5,cy:.5}; zoomEl.value = 1; render(); };
+
+// drag / pinch
+const ptrs = new Map(); let pinch0 = null;
+stage.addEventListener('pointerdown', e => {
+  stage.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  stage.classList.add('dragging');
+  if (ptrs.size === 2) { const [a,b] = [...ptrs.values()]; pinch0 = {d:Math.hypot(a.x-b.x,a.y-b.y), z:st.zoom}; }
+});
+stage.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId) || !img) return;
+  const prev = ptrs.get(e.pointerId); const cur = {x:e.clientX, y:e.clientY};
+  ptrs.set(e.pointerId, cur);
+  if (ptrs.size === 2 && pinch0) {
+    const [a,b] = [...ptrs.values()];
+    st.zoom = Math.min(5, Math.max(1, pinch0.z * Math.hypot(a.x-b.x,a.y-b.y) / pinch0.d));
+    zoomEl.value = st.zoom;
+  } else if (ptrs.size === 1) {
+    const [w,h] = rotatedSize(), s = cropSide(), scr = stage.clientWidth;
+    st.cx -= (cur.x-prev.x) * s/scr / w; st.cy -= (cur.y-prev.y) * s/scr / h;
+  }
+  clamp(); render();
+});
+const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; if (!ptrs.size) stage.classList.remove('dragging'); };
+stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  st.zoom = Math.min(5, Math.max(1, st.zoom * Math.exp(-e.deltaY/400))); zoomEl.value = st.zoom; clamp(); render();
+}, {passive:false});
+
+function openEditor(){
+  updateLabels();
+  dlg.showModal();
+  requestAnimationFrame(render);
+}
+$('#edCancel').onclick = () => dlg.close();
+dlg.addEventListener('close', () => {
+  // Cancelled (Esc or button): go back to the last applied photo, if any
+  if (dlg.returnValue === 'apply') { dlg.returnValue = ''; return; }
+  if (applied) { img = applied.img; st = {...applied.st}; zoomEl.value = st.zoom; resEl.value = applied.res; qualEl.value = applied.qual; }
+  else img = null;
+});
+$('#edApply').onclick = () => {
+  const url = exportJpeg();
+  applied = {img, st:{...st}, res:resEl.value, qual:qualEl.value};
+  setPhoto(url);
+  dlg.close('apply');
+};
+
+function setPhoto(url){
+  const th = $('#thumb');
+  if (!url) {
+    photoB64 = ''; img = null; applied = null;
+    th.textContent = 'No photo';
+    $('#editBtn').disabled = $('#removeBtn').disabled = true;
+    $('#photoStats').textContent = 'Any image format your browser can open. It will be cropped square, resized and converted to JPEG.';
+    return;
+  }
+  photoB64 = url.split(',')[1];
+  th.innerHTML = ''; const im = new Image(); im.src = url; im.alt = 'Contact photo'; th.appendChild(im);
+  $('#editBtn').disabled = $('#removeBtn').disabled = false;
+  $('#photoStats').textContent = `${resEl.value}×${resEl.value} JPEG, quality ${qualEl.value}% · ${fmtBytes(photoB64.length)} embedded in the vCard.`;
+}
+
+$('#pickBtn').onclick = () => $('#file').click();
+$('#editBtn').onclick = openEditor;
+$('#removeBtn').onclick = () => setPhoto(null);
+$('#file').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    let bmp;
+    try { bmp = await createImageBitmap(f, {imageOrientation:'from-image'}); }
+    catch { bmp = await new Promise((res,rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(f); }); }
+    img = bmp; st = {zoom:1,rot:0,cx:.5,cy:.5}; zoomEl.value = 1;
+    openEditor();
+  } catch (err) {
+    alertMsg('This image could not be opened by your browser. Try a JPEG or PNG (HEIC works only in Safari).');
+  }
+};
+window.addEventListener('resize', () => { if (dlg.open) render(); });
+})();
+</script>
+</body>
+</html>
