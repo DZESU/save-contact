@@ -435,9 +435,15 @@ function render(){
   if (cv.width !== px) { cv.width = cv.height = px; }
   drawCrop(ctx, px);
   // circle guide
+  // Dim the corners outside the circle, then draw a dark solid ring under
+  // white dashes so the guide stays visible on both light and dark photos.
+  const lw = Math.max(2, px/160), r = px/2 - lw;
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = Math.max(1, px/300); ctx.setLineDash([px/60, px/80]);
-  ctx.beginPath(); ctx.arc(px/2,px/2,px/2-ctx.lineWidth,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.beginPath(); ctx.rect(0,0,px,px); ctx.arc(px/2,px/2,r,0,Math.PI*2,true); ctx.fill();
+  ctx.beginPath(); ctx.arc(px/2,px/2,r,0,Math.PI*2);
+  ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.lineWidth = lw * 2; ctx.stroke();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = lw; ctx.setLineDash([px/50, px/70]); ctx.stroke();
   ctx.restore();
   $('#zoomOut').textContent = st.zoom.toFixed(2) + '×';
   scheduleStats();
