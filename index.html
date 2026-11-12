@@ -86,6 +86,11 @@ pre{white-space:pre-wrap;word-break:break-all;font-size:12px;background:var(--bg
 <header>
   <h1>Save Contact</h1>
   <p>Fill in the details and download a <code>.vcf</code> file you can import on any phone. Everything stays in your browser.</p>
+  <div class="btns" style="margin-top:12px">
+    <button type="button" id="importBtn">Import .vcf to edit…</button>
+    <input type="file" id="vcfFile" accept=".vcf,.vcard,text/vcard,text/x-vcard" hidden>
+  </div>
+  <p class="hint" id="importMsg">You can also drop a .vcf file anywhere on the page.</p>
 </header>
 
 <main>
@@ -567,6 +572,216 @@ $('#file').onchange = async e => {
   }
 };
 window.addEventListener('resize', () => { if (dlg.open) render(); });
+/* ---------- vCard import ---------- */
+const dec = new TextDecoder();
+function qpDecode(str, charset){
+  const bytes = [];
+  str = str.replace(/=\r?\n/g, '');
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(str.substr(i+1,2))) { bytes.push(parseInt(str.substr(i+1,2),16)); i += 2; }
+    else bytes.push(...enc.encode(str[i]));
+  }
+  try { return new TextDecoder(charset || 'utf-8').decode(new Uint8Array(bytes)); } catch { return dec.decode(new Uint8Array(bytes)); }
+}
+// Split on a separator that isn't backslash-escaped
+function splitEsc(str, sep){
+  const out = []; let cur = '';
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '\\' && i+1 < str.length) { cur += str[i] + str[i+1]; i++; }
+    else if (str[i] === sep) { out.push(cur); cur = ''; }
+    else cur += str[i];
+  }
+  out.push(cur); return out;
+}
+const unesc = s => (s||'').replace(/\\([nN,;:\\])/g, (m,c) => c === 'n' || c === 'N' ? '\n' : c).trim();
+
+function parseVcf(text){
+  text = text.replace(/^﻿/, '');
+  // Unfold continuation lines; keep quoted-printable soft breaks for qpDecode
+  const raw = text.replace(/\r\n?/g, '\n');
+  const lines = [];
+  for (const ln of raw.split('\n')) {
+    if (/^[ \t]/.test(ln) && lines.length) lines[lines.length-1] += ln.slice(1);
+    else if (lines.length && /ENCODING=QUOTED-PRINTABLE/i.test(lines[lines.length-1].split(':')[0]) && lines[lines.length-1].endsWith('=')) lines[lines.length-1] += '\n' + ln;
+    else if (lines.length && /^[A-Za-z0-9+/=]+$/.test(ln) && /^(?:[\w-]+\.)?PHOTO[;:]/i.test(lines[lines.length-1])) lines[lines.length-1] += ln; // vCard 2.1 base64 runs
+    else lines.push(ln);
+  }
+  const cards = []; let card = null;
+  for (const ln of lines) {
+    if (!ln.trim()) continue;
+    const ci = (() => { let q = false; for (let i = 0; i < ln.length; i++) { if (ln[i] === '"') q = !q; else if (ln[i] === ':' && !q) return i; } return -1; })();
+    if (ci < 0) continue;
+    const head = ln.slice(0, ci); let value = ln.slice(ci+1);
+    const parts = head.split(/;(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    let name = parts.shift(), group = '';
+    if (name.includes('.')) { [group, name] = [name.slice(0, name.lastIndexOf('.')), name.slice(name.lastIndexOf('.')+1)]; }
+    name = name.toUpperCase();
+    const params = {}; const types = new Set();
+    for (const pr of parts) {
+      const eq = pr.indexOf('=');
+      const k = eq < 0 ? 'TYPE' : pr.slice(0,eq).toUpperCase();
+      const val = (eq < 0 ? pr : pr.slice(eq+1)).replace(/^"|"$/g,'');
+      if (k === 'TYPE') val.split(',').forEach(t => t && types.add(t.toUpperCase()));
+      else params[k] = val;
+    }
+    if (eq0(params.ENCODING, 'QUOTED-PRINTABLE') || types.has('QUOTED-PRINTABLE')) value = qpDecode(value, params.CHARSET);
+    if (name === 'BEGIN' && /vcard/i.test(value)) { card = {props: [], labels: {}}; continue; }
+    if (name === 'END' && /vcard/i.test(value)) { if (card) cards.push(card); card = null; continue; }
+    if (!card) continue;
+    if (name === 'X-ABLABEL') { card.labels[group] = unesc(value); continue; }
+    card.props.push({name, group, params, types, value});
+  }
+  return cards;
+}
+const eq0 = (a,b) => (a||'').toUpperCase() === b;
+
+function cardName(c){
+  const fn = c.props.find(p => p.name === 'FN');
+  if (fn) return unesc(fn.value);
+  const n = c.props.find(p => p.name === 'N');
+  return n ? splitEsc(n.value,';').slice(0,2).reverse().map(unesc).join(' ').trim() : '(no name)';
+}
+
+function normDate(s){
+  s = (s||'').trim();
+  let m = s.match(/^(\d{4})-?(\d{2})-?(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+const cleanLabel = l => (l||'').replace(/^_\$!<|>!\$_$/g,'');
+
+function setField(name, val){ if (form.elements[name] && val) form.elements[name].value = val; }
+function fillRow(kind, type, fields){
+  const r = addRow(kind);
+  const sel = r.querySelector('select');
+  if ([...sel.options].some(o => o.value === type)) sel.value = type; else sel.value = 'other';
+  for (const [k,v2] of Object.entries(fields)) { const i = r.querySelector(`[data-f="${k}"]`); if (i) i.value = v2 || ''; }
+}
+
+async function loadCard(c){
+  form.reset(); for (const k of Object.keys(TYPES)) document.getElementById(k).innerHTML = '';
+  setPhoto(null); $('#previewSec').hidden = true;
+  const lbl = p => cleanLabel(c.labels[p.group] || '');
+  const socialUrls = new Set();
+  const skipped = [];
+  let photoProp = null;
+
+  for (const p of c.props) {
+    const T = p.types, val = p.value;
+    switch (p.name) {
+      case 'N': { const [fam,giv,mid,pre,suf] = splitEsc(val,';').map(unesc);
+        setField('family',fam); setField('given',giv); setField('middle',mid); setField('prefix',pre); setField('suffix',suf); break; }
+      case 'FN': setField('fn', unesc(val)); break;
+      case 'NICKNAME': setField('nickname', unesc(val)); break;
+      case 'X-PHONETIC-FIRST-NAME': setField('pFirst', unesc(val)); break;
+      case 'X-PHONETIC-MIDDLE-NAME': setField('pMiddle', unesc(val)); break;
+      case 'X-PHONETIC-LAST-NAME': setField('pLast', unesc(val)); break;
+      case 'ORG': { const [o, ...d] = splitEsc(val,';').map(unesc); setField('org',o); setField('dept', d.filter(Boolean).join(', ')); break; }
+      case 'TITLE': setField('title', unesc(val)); break;
+      case 'NOTE': setField('note', unesc(val)); break;
+      case 'BDAY': setField('bday', normDate(val)); if (!normDate(val)) skipped.push('birthday without year'); break;
+      case 'ANNIVERSARY': case 'X-ANNIVERSARY': setField('anniv', normDate(val)); break;
+      case 'X-ABDATE': if (/anniversary/i.test(lbl(p))) setField('anniv', normDate(val)); break;
+      case 'TEL': {
+        const l = lbl(p).toLowerCase();
+        const t = T.has('FAX') ? (T.has('HOME') ? 'home-fax' : 'work-fax') : T.has('IPHONE') || l === 'iphone' ? 'iphone'
+          : T.has('CELL') || T.has('MOBILE') || l === 'mobile' ? 'cell' : T.has('PAGER') ? 'pager' : T.has('MAIN') || l === 'main' ? 'main'
+          : T.has('HOME') ? 'home' : T.has('WORK') ? 'work' : 'other';
+        fillRow('tel', t, {value: unesc(val).replace(/^tel:/i,'')}); break; }
+      case 'EMAIL': fillRow('email', T.has('HOME') ? 'home' : T.has('WORK') ? 'work' : 'other', {value: unesc(val).replace(/^mailto:/i,'')}); break;
+      case 'ADR': { const [pobox,ext,street,city,region,postal,country] = splitEsc(val,';').map(unesc);
+        fillRow('adr', T.has('HOME') ? 'home' : T.has('WORK') ? 'work' : 'other', {pobox,ext,street,city,region,postal,country}); break; }
+      case 'X-SOCIALPROFILE': {
+        const url = unesc(val);
+        const type = (p.types.values().next().value || '').toLowerCase().replace('twitter','x');
+        const user = p.params['X-USER'];
+        socialUrls.add(url);
+        fillRow('social', TYPES.social.some(t => t[0] === type) ? type : 'other', {value: user && TYPES.social.some(t => t[0] === type && t[0] !== 'other') ? user : url}); break; }
+      case 'IMPP': {
+        const svc = (p.params['X-SERVICE-TYPE'] || lbl(p) || '').toLowerCase();
+        const key = TYPES.impp.find(t => t[0] !== 'other' && svc.includes(t[0]))?.[0] || 'other';
+        fillRow('impp', key, {value: unesc(val).replace(/^[a-z][a-z0-9+.-]*:/i,'')}); break; }
+      case 'PHOTO': photoProp = p; break;
+    }
+  }
+  // URLs (after social profiles so duplicates of them can be skipped)
+  for (const p of c.props.filter(p => p.name === 'URL')) {
+    const url = unesc(p.value), l = lbl(p).toLowerCase();
+    if (socialUrls.has(url)) continue;
+    const social = TYPES.social.find(t => t[0] !== 'other' && (l.startsWith(t[0]) || (t[0]==='x' && l === 'twitter')));
+    if (social) { fillRow('social', social[0], {value: url}); continue; }
+    fillRow('url', l === 'homepage' ? 'homepage' : p.types.has('HOME') ? 'home' : p.types.has('WORK') ? 'work' : 'other', {value: url});
+  }
+  // If FN just equals the auto-generated name, leave the override empty
+  if (form.elements.fn.value) {
+    const auto = [v('prefix'),v('given'),v('middle'),v('family')].filter(Boolean).join(' ') + (v('suffix') ? ', ' + v('suffix') : '');
+    if (form.elements.fn.value.trim() === auto.trim() || (!auto.trim() && form.elements.fn.value.trim() === v('org'))) form.elements.fn.value = '';
+    else form.querySelector('details').open = true;
+  }
+  if (['pFirst','pMiddle','pLast'].some(v)) form.querySelector('details').open = true;
+  if (!document.querySelector('#tel .row')) addRow('tel');
+  if (!document.querySelector('#email .row')) addRow('email');
+
+  if (photoProp) {
+    try { await importPhoto(photoProp); } catch { skipped.push('photo (could not be read)'); }
+  }
+  return skipped;
+}
+
+async function importPhoto(p){
+  let b64, mime = 'image/jpeg';
+  const val = p.value.trim();
+  const m = val.match(/^data:([^;,]+)?(;base64)?,(.*)$/is);
+  if (m) { mime = m[1] || mime; b64 = m[3]; }
+  else if (/^https?:/i.test(val)) throw new Error('remote photo');
+  else { b64 = val; const t = [...p.types][0] || p.params.MEDIATYPE || ''; if (/png/i.test(t)) mime = 'image/png'; else if (/gif/i.test(t)) mime = 'image/gif'; }
+  b64 = b64.replace(/\s+/g,'');
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const isJpeg = bytes[0] === 0xFF && bytes[1] === 0xD8;
+  const bmp = await createImageBitmap(new Blob([bytes], {type: isJpeg ? 'image/jpeg' : mime}));
+  img = bmp; st = {zoom:1,rot:0,cx:.5,cy:.5}; zoomEl.value = 1;
+  const side = Math.min(bmp.width, bmp.height);
+  resEl.value = Math.max(64, Math.min(1024, Math.round(side/16)*16)); updateLabels();
+  applied = {img, st:{...st}, res:resEl.value, qual:qualEl.value};
+  if (isJpeg) {
+    // Keep the original JPEG untouched until the user edits it
+    setPhoto('data:image/jpeg;base64,' + b64);
+    $('#photoStats').textContent = `Imported ${bmp.width}×${bmp.height} JPEG · ${fmtBytes(b64.length)} embedded in the vCard. Use "Edit crop / size" to crop or shrink it.`;
+  } else {
+    setPhoto(exportJpeg());
+  }
+}
+
+async function importFile(f){
+  if (!f) return;
+  const msg = $('#importMsg');
+  try {
+    const cards = parseVcf(await f.text());
+    if (!cards.length) { msg.innerHTML = '<span class="err">No contact found in that file.</span>'; return; }
+    let idx = 0;
+    if (cards.length > 1) {
+      const list = cards.map((c,i) => `${i+1}. ${cardName(c)}`).join('\n');
+      const ans = prompt(`This file has ${cards.length} contacts. Which one do you want to edit?\n\n${list.length > 1500 ? list.slice(0,1500)+'\n…' : list}`, '1');
+      if (ans === null) return;
+      idx = Math.min(cards.length, Math.max(1, parseInt(ans,10) || 1)) - 1;
+    }
+    const skipped = await loadCard(cards[idx]);
+    msg.textContent = `Loaded "${cardName(cards[idx])}" from ${f.name}.` + (skipped.length ? ' Not imported: ' + skipped.join(', ') + '.' : '');
+    window.scrollTo({top:0, behavior:'smooth'});
+  } catch (err) {
+    console.error(err);
+    msg.innerHTML = '<span class="err">Could not read that file as a vCard.</span>';
+  }
+}
+$('#importBtn').onclick = () => $('#vcfFile').click();
+$('#vcfFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; importFile(f); };
+window.addEventListener('dragover', e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
+window.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  e.preventDefault();
+  if (/\.(vcf|vcard)$/i.test(f.name) || /vcard/i.test(f.type)) importFile(f);
+  else if (f.type.startsWith('image/')) { const dt = new DataTransfer(); dt.items.add(f); $('#file').files = dt.files; $('#file').dispatchEvent(new Event('change')); }
+});
 })();
 </script>
 </body>
